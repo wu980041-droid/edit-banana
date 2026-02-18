@@ -1,0 +1,11 @@
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+input/
+output/
+sam3_output/
+models/

@@ -1,26 +1,67 @@
 #!/usr/bin/env python3
 """
-FastAPI Backend Server — web service entry for Edit Banana.
+Zeabur-ready FastAPI backend for Edit Banana.
 
-Provides upload and conversion API. Run with: python server_pa.py
-Server runs at http://localhost:8000
+- POST /convert : upload image/pdf and return remote downloadable URLs
+- GET  /api/files : secure file download from output directory
 """
 
 import os
 import sys
 from pathlib import Path
+from urllib.parse import quote
+
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+import uvicorn
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+DEFAULT_ALLOWED_ROOT = "/app/output"
+
+
+def _resolve_output_root() -> str:
+    env_root = os.getenv("EDIT_BANANA_ALLOWED_ROOT", "").strip()
+    candidate = env_root or DEFAULT_ALLOWED_ROOT
+    return os.path.realpath(candidate)
+
+
+def _ensure_in_allowed_root(raw_path: str) -> str:
+    real = os.path.realpath(raw_path)
+    root = _resolve_output_root()
+    if not real.startswith(root):
+        raise HTTPException(403, "forbidden path")
+    return real
+
+
+def _build_public_url(file_path: str) -> str | None:
+    base = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not base:
+        return None
+    return f"{base}/api/files?path={quote(file_path)}"
+
+
+def _derive_editable_files(result_path: str) -> tuple[str | None, str | None]:
+    dirname = os.path.dirname(result_path)
+    basename = os.path.basename(result_path)
+    stem = os.path.splitext(basename)[0]
+    candidates = [
+        os.path.join(dirname, f"{stem}.drawio"),
+        os.path.join(dirname, f"{stem}.xml"),
+        os.path.join(dirname, f"{stem}.pptx"),
+    ]
+    existing = [p for p in candidates if os.path.exists(p)]
+    drawio = next((p for p in existing if p.endswith(".drawio") or p.endswith(".xml")), None)
+    pptx = next((p for p in existing if p.endswith(".pptx")), None)
+    return drawio, pptx
+
 
 app = FastAPI(
     title="Edit Banana API",
     description="Universal Content Re-Editor — image/PDF to editable DrawIO or PPTX",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.add_middleware(
@@ -42,27 +83,34 @@ def root():
     return {"service": "Edit Banana", "docs": "/docs"}
 
 
+@app.get("/api/files")
+def get_output_file(path: str = Query(..., description="Absolute path of generated output file")):
+    safe = _ensure_in_allowed_root(path)
+    if not os.path.exists(safe):
+        raise HTTPException(404, "file not found")
+    filename = os.path.basename(safe)
+    return FileResponse(safe, filename=filename)
+
+
 @app.post("/convert")
 async def convert(file: UploadFile = File(...)):
-    """Upload image or PDF and return editable output (DrawIO XML or PPTX)."""
-    # Validate type
+    """Upload image/pdf and return editable output URLs."""
     name = file.filename or ""
     ext = Path(name).suffix.lower()
     if ext not in {".png", ".jpg", ".jpeg", ".pdf", ".bmp", ".tiff", ".webp"}:
         raise HTTPException(400, "Unsupported format. Use image or PDF.")
 
-    # Save to temp and run pipeline
     config_path = os.path.join(PROJECT_ROOT, "config", "config.yaml")
     if not os.path.exists(config_path):
         raise HTTPException(503, "Server not configured (missing config/config.yaml)")
 
     try:
-        from main import load_config, Pipeline
-        import tempfile
+        from main import Pipeline, load_config
         import shutil
+        import tempfile
 
         config = load_config()
-        output_dir = config.get("paths", {}).get("output_dir", "./output")
+        output_dir = config.get("paths", {}).get("output_dir", DEFAULT_ALLOWED_ROOT)
         os.makedirs(output_dir, exist_ok=True)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
@@ -79,8 +127,22 @@ async def convert(file: UploadFile = File(...)):
             )
             if not result_path or not os.path.exists(result_path):
                 raise HTTPException(500, "Conversion failed")
-            # In a full implementation you would return the file or a download URL
-            return {"success": True, "output_path": result_path}
+
+            safe_output_path = _ensure_in_allowed_root(result_path)
+            drawio_file, pptx_file = _derive_editable_files(safe_output_path)
+
+            drawio_url = _build_public_url(drawio_file) if drawio_file else None
+            pptx_url = _build_public_url(pptx_file) if pptx_file else None
+
+            return {
+                "success": True,
+                "output_path": safe_output_path,
+                "editable": {
+                    "drawio_url": drawio_url,
+                    "xml_url": drawio_url,
+                    "pptx_url": pptx_url,
+                },
+            }
         finally:
             try:
                 os.unlink(tmp_path)
@@ -93,7 +155,8 @@ async def convert(file: UploadFile = File(...)):
 
 
 def main():
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":

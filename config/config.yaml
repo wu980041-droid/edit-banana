@@ -1,0 +1,46 @@
+sam3:
+  checkpoint_path: "/app/models/sam3.pt"
+  bpe_path: "/app/models/bpe_simple_vocab_16e6.txt.gz"
+  score_threshold: 0.5
+  epsilon_factor: 0.02
+  min_area: 100
+
+prompt_groups:
+  image:
+    name: image
+    score_threshold: 0.5
+    min_area: 100
+    priority: 2
+  arrow:
+    name: arrow
+    score_threshold: 0.45
+    min_area: 50
+    priority: 4
+  shape:
+    name: shape
+    score_threshold: 0.5
+    min_area: 200
+    priority: 3
+  background:
+    name: background
+    score_threshold: 0.25
+    min_area: 500
+    priority: 1
+
+multimodal:
+  mode: "api"
+  api_key: ""
+  base_url: ""
+  model: ""
+  local_base_url: "http://localhost:11434/v1"
+  local_api_key: "ollama"
+  local_model: ""
+  force_vlm_ocr: false
+  max_tokens: 4000
+  timeout: 60
+  ca_cert_path: false
+  proxy: ""
+
+paths:
+  input_dir: "/app/input"
+  output_dir: "/app/output"
