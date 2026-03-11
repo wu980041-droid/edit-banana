@@ -1,0 +1,9 @@
+{
+  "name": "edit-banana",
+  "version": "1.0.0",
+  "description": "Image editing pipeline with SAM3 and FastAPI",
+  "scripts": {
+    "build": "echo 'Python project – no JS build step required.'",
+    "start": "uvicorn server_pa:app --host 0.0.0.0 --port 8000"
+  }
+}
