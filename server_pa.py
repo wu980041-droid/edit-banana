@@ -58,6 +58,21 @@ def _derive_editable_files(result_path: str) -> tuple[str | None, str | None]:
     return drawio, pptx
 
 
+_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".tiff": "image/tiff",
+}
+
+
+def _guess_media_type(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    return _MEDIA_TYPES.get(ext, "application/octet-stream")
+
+
 app = FastAPI(
     title="Edit Banana API",
     description="Universal Content Re-Editor — image/PDF to editable DrawIO or PPTX",
@@ -92,6 +107,36 @@ def get_output_file(path: str = Query(..., description="Absolute path of generat
     return FileResponse(safe, filename=filename)
 
 
+@app.get("/api/preview/{image_name}")
+def get_preview_image(image_name: str):
+    """Serve the preview image for a processed result by image stem name.
+
+    This provides a stable, predictable URL for frontend image previews
+    without requiring the client to know the absolute file path.
+    """
+    root = _resolve_output_root()
+    # Search for preview file in the output subdirectory
+    img_dir = os.path.join(root, image_name)
+    if not os.path.isdir(img_dir):
+        raise HTTPException(404, "image not found")
+
+    # Look for preview files (saved during /convert)
+    for candidate in ("preview.png", "preview.jpg", "preview.jpeg",
+                       "preview.webp", "preview.bmp", "preview.tiff"):
+        preview_path = os.path.join(img_dir, candidate)
+        if os.path.exists(preview_path):
+            safe = _ensure_in_allowed_root(preview_path)
+            return FileResponse(safe, media_type=_guess_media_type(candidate))
+
+    # Fallback: serve sam3 visualization
+    sam3_path = os.path.join(img_dir, "sam3_extraction.png")
+    if os.path.exists(sam3_path):
+        safe = _ensure_in_allowed_root(sam3_path)
+        return FileResponse(safe, media_type="image/png")
+
+    raise HTTPException(404, "preview not found")
+
+
 @app.post("/convert")
 async def convert(file: UploadFile = File(...)):
     """Upload image/pdf and return editable output URLs."""
@@ -119,6 +164,14 @@ async def convert(file: UploadFile = File(...)):
 
         try:
             pipeline = Pipeline(config)
+
+            # Save original uploaded image to output dir for preview
+            img_stem = Path(name).stem
+            img_output_dir = os.path.join(output_dir, img_stem)
+            os.makedirs(img_output_dir, exist_ok=True)
+            preview_path = os.path.join(img_output_dir, f"preview{ext}")
+            shutil.copy2(tmp_path, preview_path)
+
             result_path = pipeline.process_image(
                 tmp_path,
                 output_dir=output_dir,
@@ -134,9 +187,18 @@ async def convert(file: UploadFile = File(...)):
             drawio_url = _build_public_url(drawio_file) if drawio_file else None
             pptx_url = _build_public_url(pptx_file) if pptx_file else None
 
+            # Build preview image URL (original image saved in output dir)
+            preview_url = _build_public_url(preview_path) if os.path.exists(preview_path) else None
+
+            # Also check for sam3 visualization as a fallback
+            sam3_vis_path = os.path.join(img_output_dir, "sam3_extraction.png")
+            sam3_vis_url = _build_public_url(sam3_vis_path) if os.path.exists(sam3_vis_path) else None
+
             return {
                 "success": True,
                 "output_path": safe_output_path,
+                "preview_url": preview_url,
+                "sam3_visualization_url": sam3_vis_url,
                 "editable": {
                     "drawio_url": drawio_url,
                     "xml_url": drawio_url,
