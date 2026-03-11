@@ -8,8 +8,21 @@ Zeabur-ready FastAPI backend for Edit Banana.
 
 import os
 import sys
+import random
 from pathlib import Path
 from urllib.parse import quote
+
+import numpy as np
+import torch
+
+# 固定所有随机种子，确保相同输入产生相同输出
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware

@@ -337,14 +337,14 @@ def extract_style_colors(image: np.ndarray, bbox: list) -> tuple:
         try:
             # 降采样以提高速度
             if len(inner_pixels) > 2000:
-                indices = np.random.choice(len(inner_pixels), 2000, replace=False)
+                indices = np.linspace(0, len(inner_pixels) - 1, 2000, dtype=int)
                 pixels_for_kmeans = inner_pixels[indices].astype(np.float32)
             else:
                 pixels_for_kmeans = inner_pixels.astype(np.float32)
                 
             criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
             k = 2  # 假设背景+前景杂噪
-            _, labels, centers = cv2.kmeans(pixels_for_kmeans, k, None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+            _, labels, centers = cv2.kmeans(pixels_for_kmeans, k, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
             counts = np.bincount(labels.flatten())
             dominant_idx = np.argmax(counts)
             fill_rgb = centers[dominant_idx].astype(int)
@@ -534,7 +534,7 @@ def extract_color_with_mask(image: np.ndarray, bbox: list, mask: np.ndarray,
                 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
                 k = min(3, len(fill_pixels) // 20)
                 k = max(2, k)
-                _, labels, centers = cv2.kmeans(pixels_f32, k, None, criteria, 5, cv2.KMEANS_RANDOM_CENTERS)
+                _, labels, centers = cv2.kmeans(pixels_f32, k, None, criteria, 5, cv2.KMEANS_PP_CENTERS)
                 
                 # 选择占比最大的颜色
                 counts = np.bincount(labels.flatten())

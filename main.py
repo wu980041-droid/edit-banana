@@ -15,10 +15,22 @@ Usage:
 
 import os
 import sys
+import random
 import argparse
 import yaml
+import numpy as np
+import torch
 from pathlib import Path
 from typing import Optional, List
+
+# 固定所有随机种子，确保相同输入产生相同输出
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # 添加项目根目录到 sys.path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
