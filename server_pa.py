@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uvicorn
@@ -36,8 +36,10 @@ def _ensure_in_allowed_root(raw_path: str) -> str:
     return real
 
 
-def _build_public_url(file_path: str) -> str | None:
+def _build_public_url(file_path: str, fallback_base: str = "") -> str | None:
     base = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if not base:
+        base = fallback_base
     if not base:
         return None
     return f"{base}/api/files?path={quote(file_path)}"
@@ -138,7 +140,7 @@ def get_preview_image(image_name: str):
 
 
 @app.post("/convert")
-async def convert(file: UploadFile = File(...)):
+async def convert(request: Request, file: UploadFile = File(...)):
     """Upload image/pdf and return editable output URLs."""
     name = file.filename or ""
     ext = Path(name).suffix.lower()
@@ -149,6 +151,9 @@ async def convert(file: UploadFile = File(...)):
     if not os.path.exists(config_path):
         raise HTTPException(503, "Server not configured (missing config/config.yaml)")
 
+    # Derive base URL from request as fallback when PUBLIC_BASE_URL is unset
+    base_url = str(request.base_url).rstrip("/")
+
     try:
         from main import Pipeline, load_config
         import shutil
@@ -158,15 +163,20 @@ async def convert(file: UploadFile = File(...)):
         output_dir = config.get("paths", {}).get("output_dir", DEFAULT_ALLOWED_ROOT)
         os.makedirs(output_dir, exist_ok=True)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_path = tmp.name
+        # Save temp file using the ORIGINAL filename stem so that the
+        # pipeline creates its output subdirectory with a predictable name
+        # (e.g. output_dir/my_image/) instead of a random temp name.
+        img_stem = Path(name).stem
+        tmp_dir = tempfile.mkdtemp()
+        tmp_path = os.path.join(tmp_dir, f"{img_stem}{ext}")
+        with open(tmp_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
 
         try:
             pipeline = Pipeline(config)
 
-            # Save original uploaded image to output dir for preview
-            img_stem = Path(name).stem
+            # Save original uploaded image to output dir for preview.
+            # The pipeline will also write into this same directory.
             img_output_dir = os.path.join(output_dir, img_stem)
             os.makedirs(img_output_dir, exist_ok=True)
             preview_path = os.path.join(img_output_dir, f"preview{ext}")
@@ -184,15 +194,18 @@ async def convert(file: UploadFile = File(...)):
             safe_output_path = _ensure_in_allowed_root(result_path)
             drawio_file, pptx_file = _derive_editable_files(safe_output_path)
 
-            drawio_url = _build_public_url(drawio_file) if drawio_file else None
-            pptx_url = _build_public_url(pptx_file) if pptx_file else None
+            # Use the actual output directory from the pipeline result
+            actual_output_dir = os.path.dirname(safe_output_path)
 
-            # Build preview image URL (original image saved in output dir)
-            preview_url = _build_public_url(preview_path) if os.path.exists(preview_path) else None
+            drawio_url = _build_public_url(drawio_file, base_url) if drawio_file else None
+            pptx_url = _build_public_url(pptx_file, base_url) if pptx_file else None
 
-            # Also check for sam3 visualization as a fallback
-            sam3_vis_path = os.path.join(img_output_dir, "sam3_extraction.png")
-            sam3_vis_url = _build_public_url(sam3_vis_path) if os.path.exists(sam3_vis_path) else None
+            # Build preview image URL
+            preview_url = _build_public_url(preview_path, base_url) if os.path.exists(preview_path) else None
+
+            # Also check for sam3 visualization
+            sam3_vis_path = os.path.join(actual_output_dir, "sam3_extraction.png")
+            sam3_vis_url = _build_public_url(sam3_vis_path, base_url) if os.path.exists(sam3_vis_path) else None
 
             return {
                 "success": True,
@@ -206,8 +219,10 @@ async def convert(file: UploadFile = File(...)):
                 },
             }
         finally:
+            # Clean up temp file and temp directory
             try:
                 os.unlink(tmp_path)
+                os.rmdir(tmp_dir)
             except Exception:
                 pass
     except HTTPException:
